@@ -15,6 +15,16 @@ MBTileReader::MBTileReader(const char *filename)
 		sqlite3_close(this->db);
 		throw runtime_error("Error opening database");
 	}
+
+	char* zErrMsg = NULL;
+	status = sqlite3_exec(this->db, "SELECT * FROM metadata;", this->MetadataCallbackStatic, this, &zErrMsg);
+	if (status != SQLITE_OK)
+	{
+		string err("SQL error: ");
+		err += zErrMsg;
+		sqlite3_free(zErrMsg);
+		throw runtime_error(err);
+	}
 }
 
 MBTileReader::~MBTileReader()
@@ -22,7 +32,38 @@ MBTileReader::~MBTileReader()
 	sqlite3_close(this->db);
 }
 
-void MBTileReader::GetTile(unsigned int zoomLevel,
+int MBTileReader::MetadataCallbackStatic(void* obj, int argc, char** argv, char** azColName)
+{
+	return ((MBTileReader*)obj)->MetadataCallback(argc, argv, azColName);
+}
+
+int MBTileReader::MetadataCallback(int argc, char** argv, char** azColName)
+{
+	string name, value;
+	for (int i = 0; i < argc; i++) {
+		if (strncmp(azColName[i], "name", 5) == 0)
+			name = (argv[i] ? argv[i] : "NULL");
+		if (strncmp(azColName[i], "value", 6) == 0)
+			value = (argv[i] ? argv[i] : "NULL");
+	}
+	if (name.size() > 0)
+		this->metadata[name] = value;
+	return 0;
+}
+
+string MBTileReader::GetMetadata(const char* metaField)
+{
+	return metadata[metaField];
+}
+
+void MBTileReader::GetMetadataFields(vector<string>& fieldNamesOut)
+{
+	fieldNamesOut.clear();
+	for (std::map<std::string, std::string>::iterator it = metadata.begin(); it != metadata.end(); it++)
+		fieldNamesOut.push_back(it->first);
+}
+
+bool MBTileReader::GetTile(unsigned int zoomLevel,
 	unsigned int tileColumn,
 	unsigned int tileRow,
 	string &blobOut)
@@ -36,14 +77,15 @@ void MBTileReader::GetTile(unsigned int zoomLevel,
 		0  // Pointer to unused portion of stmt
 	);
 	if(status!=SQLITE_OK)
-		throw runtime_error("Could not prepare statement");
+		return false;
+		//throw runtime_error("Could not prepare statement");
 
 	status = sqlite3_bind_int(stmt, 1, zoomLevel);
-	if(status!=SQLITE_OK) throw runtime_error("Could not bind value to statement");
+	if (status != SQLITE_OK) return false;//throw runtime_error("Could not bind value to statement");
 	status = sqlite3_bind_int(stmt, 2, tileColumn);
-	if(status!=SQLITE_OK) throw runtime_error("Could not bind value to statement");
+	if(status!=SQLITE_OK) return false;// throw runtime_error("Could not bind value to statement");
 	status = sqlite3_bind_int(stmt, 3, tileRow);
-	if(status!=SQLITE_OK) throw runtime_error("Could not bind value to statement");
+	if(status!=SQLITE_OK) return false;// throw runtime_error("Could not bind value to statement");
 
 	status = SQLITE_ROW;
 	bool firstRow = true;
@@ -53,7 +95,8 @@ void MBTileReader::GetTile(unsigned int zoomLevel,
 		if(firstRow && status == SQLITE_DONE)
 		{
 			sqlite3_finalize(stmt);
-			throw out_of_range("Tile not found");
+			return false;
+			//throw out_of_range("Tile not found");
 		}
 
 		if(status == SQLITE_ROW)
@@ -62,11 +105,12 @@ void MBTileReader::GetTile(unsigned int zoomLevel,
 			const void *blobRaw = sqlite3_column_blob(stmt, 0);
 			blobOut.insert(0, (const char *)blobRaw, numBytes); //Copy result to output
 			sqlite3_finalize(stmt);
-			return;
+			return true;
 		}
 		firstRow = false;
 	}
 
 	sqlite3_finalize(stmt);
-	throw runtime_error("Error retrieving tile from database");
+	return false;
+	//throw runtime_error("Error retrieving tile from database");
 }
